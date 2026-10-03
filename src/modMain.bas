@@ -14,12 +14,18 @@ Private Declare PtrSafe Function GetAsyncKeyState Lib "user32" (ByVal vKey As Lo
 Private Declare PtrSafe Function GetKeyState Lib "user32" (ByVal nVirtKey As Long) As Integer
 Private Declare PtrSafe Function GetSystemMetrics Lib "user32" (ByVal nIndex As Long) As Long
 Private Declare PtrSafe Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As Long)
+Private Declare PtrSafe Function GetDC Lib "user32" (ByVal hWnd As LongPtr) As LongPtr
+Private Declare PtrSafe Function ReleaseDC Lib "user32" (ByVal hWnd As LongPtr, ByVal hDC As LongPtr) As Long
+Private Declare PtrSafe Function GetDeviceCaps Lib "gdi32" (ByVal hDC As LongPtr, ByVal nIndex As Long) As Long
 #Else
 Private Declare Function GetCursorPos Lib "user32" (ByRef lpPoint As PointApi) As Long
 Private Declare Function GetAsyncKeyState Lib "user32" (ByVal vKey As Long) As Integer
 Private Declare Function GetKeyState Lib "user32" (ByVal nVirtKey As Long) As Integer
 Private Declare Function GetSystemMetrics Lib "user32" (ByVal nIndex As Long) As Long
 Private Declare Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As Long)
+Private Declare Function GetDC Lib "user32" (ByVal hWnd As Long) As Long
+Private Declare Function ReleaseDC Lib "user32" (ByVal hWnd As Long, ByVal hDC As Long) As Long
+Private Declare Function GetDeviceCaps Lib "gdi32" (ByVal hDC As Long, ByVal nIndex As Long) As Long
 #End If
 
 Private Const VK_LBUTTON As Long = &H1
@@ -29,6 +35,7 @@ Private Const VK_ESCAPE As Long = &H1B
 Private Const SM_SWAPBUTTON As Long = 23
 Private Const SM_CXDRAG As Long = 68
 Private Const SM_CYDRAG As Long = 69
+Private Const LOGPIXELSX As Long = 88
 
 Private mBusy As Boolean
 
@@ -96,6 +103,19 @@ Private Sub Pause(ByVal sec As Single)
         DoEvents
     Loop
 End Sub
+
+' マクロから見た画面の DPI（GetCursorPos の座標と同じ基準）
+Private Function ScreenDpi() As Long
+#If VBA7 Then
+    Dim dc As LongPtr
+#Else
+    Dim dc As Long
+#End If
+    dc = GetDC(0)
+    ScreenDpi = GetDeviceCaps(dc, LOGPIXELSX)
+    ReleaseDC 0, dc
+    If ScreenDpi <= 0 Then ScreenDpi = 96
+End Function
 
 '==============================================================
 '  タスクボード
@@ -213,7 +233,8 @@ Public Sub Note_Click()
     If part Is Nothing Then Exit Sub
     Set g = NoteFromShape(part)
     If g Is Nothing Then Exit Sub
-    Set ws = g.Parent
+    ' g.Parent は使わない（ParentGroup で取ったグループの Parent は、シートではなく部品の図形になることがある）
+    Set ws = g.TopLeftCell.Worksheet
     mBusy = True
     ProtectNotes ws
     withShift = (GetKeyState(VK_SHIFT) < 0)
@@ -294,22 +315,26 @@ End Sub
 ' （見出し・ボタンの段より上へは出さない。Esc キーを押すと元の位置に戻してやめる）
 Private Function DragNotes(ByVal ws As Worksheet, ByVal notes As Collection) As Boolean
     Dim btn As Long, p0 As PointApi, p As PointApi, kx As Double, ky As Double
-    Dim x0() As Single, y0() As Single, minX As Single, minY As Single, topY As Single
+    Dim x0() As Single, y0() As Single, w0() As Single, h0() As Single, minX As Single, minY As Single, topY As Single
     Dim dx As Single, dy As Single, i As Long, g As Shape, dragging As Boolean, canceled As Boolean
     btn = VK_LBUTTON
     If GetSystemMetrics(SM_SWAPBUTTON) <> 0 Then btn = VK_RBUTTON
     If GetCursorPos(p0) = 0 Then Exit Function
-    ' 画面の 1 ピクセルが何 pt か（シートの拡大率・画面の拡大率を含む）
-    With ActiveWindow.Panes(ActiveWindow.Panes.Count)
-        kx = 1000# / (.PointsToScreenPixelsX(1000) - .PointsToScreenPixelsX(0))
-        ky = 1000# / (.PointsToScreenPixelsY(1000) - .PointsToScreenPixelsY(0))
-    End With
+    ' 画面の 1 ピクセルが何 pt か（シートの拡大率・画面の拡大率を含む）。
+    ' マクロの中の GetCursorPos は、拡大率の違う画面でもシステムの DPI で数えた座標を返すので、その DPI で換算する
+    ' （PointsToScreenPixels はそのような画面で正しく変換されないことがあるので使わない）
+    kx = 72# / (ScreenDpi() * ActiveWindow.Zoom / 100#)
+    ky = kx
     ReDim x0(1 To notes.Count)
     ReDim y0(1 To notes.Count)
+    ReDim w0(1 To notes.Count)
+    ReDim h0(1 To notes.Count)
     For Each g In notes
         i = i + 1
         x0(i) = g.Left
         y0(i) = g.Top
+        w0(i) = g.Width
+        h0(i) = g.Height
         If i = 1 Or x0(i) < minX Then minX = x0(i)
         If i = 1 Or y0(i) < minY Then minY = y0(i)
     Next
@@ -347,6 +372,15 @@ Private Function DragNotes(ByVal ws As Worksheet, ByVal notes As Collection) As 
         DoEvents
         Sleep 10
     Loop
+    ' 拡大率の違う画面では、動かすたびに Excel が付箋の大きさを丸め直して少しずつ変わるので、元の大きさに戻す
+    If dragging Then
+        i = 0
+        For Each g In notes
+            i = i + 1
+            If g.Width <> w0(i) Then g.Width = w0(i)
+            If g.Height <> h0(i) Then g.Height = h0(i)
+        Next
+    End If
     DragNotes = dragging
 End Function
 

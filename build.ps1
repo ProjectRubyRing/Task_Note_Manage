@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-  src フォルダの VBA ソースから「付箋タスクボード.xlsm」を作ります。
+  src フォルダの VBA ソースから「Task_Board.xlsm」を作ります。
 
 .DESCRIPTION
   Excel を画面に出さずに起動し、新しいブックへモジュールと入力画面を組み込み、
@@ -20,7 +20,7 @@
   powershell -ExecutionPolicy Bypass -File .\build.ps1 -OutFile .\test.xlsm -Force
 #>
 param(
-    [string]$OutFile = (Join-Path $PSScriptRoot '付箋タスクボード.xlsm'),
+    [string]$OutFile = (Join-Path $PSScriptRoot 'Task_Board.xlsm'),
     [switch]$Force
 )
 
