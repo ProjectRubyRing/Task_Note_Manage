@@ -10,9 +10,25 @@ End Type
 
 #If VBA7 Then
 Private Declare PtrSafe Function GetCursorPos Lib "user32" (ByRef lpPoint As PointApi) As Long
+Private Declare PtrSafe Function GetAsyncKeyState Lib "user32" (ByVal vKey As Long) As Integer
+Private Declare PtrSafe Function GetKeyState Lib "user32" (ByVal nVirtKey As Long) As Integer
+Private Declare PtrSafe Function GetSystemMetrics Lib "user32" (ByVal nIndex As Long) As Long
+Private Declare PtrSafe Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As Long)
 #Else
 Private Declare Function GetCursorPos Lib "user32" (ByRef lpPoint As PointApi) As Long
+Private Declare Function GetAsyncKeyState Lib "user32" (ByVal vKey As Long) As Integer
+Private Declare Function GetKeyState Lib "user32" (ByVal nVirtKey As Long) As Integer
+Private Declare Function GetSystemMetrics Lib "user32" (ByVal nIndex As Long) As Long
+Private Declare Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As Long)
 #End If
+
+Private Const VK_LBUTTON As Long = &H1
+Private Const VK_RBUTTON As Long = &H2
+Private Const VK_SHIFT As Long = &H10
+Private Const VK_ESCAPE As Long = &H1B
+Private Const SM_SWAPBUTTON As Long = 23
+Private Const SM_CXDRAG As Long = 68
+Private Const SM_CYDRAG As Long = 69
 
 Private mBusy As Boolean
 
@@ -30,6 +46,7 @@ Private Function BeginOp() As Boolean
     End If
     mBusy = True
     Application.ScreenUpdating = False
+    ProtectBoards
     NormalizeNotes
     BeginOp = True
 End Function
@@ -167,7 +184,7 @@ Private Sub StepSelected(ByVal delta As Long)
     If notes.Count = 0 Then
         EndOp
         ShowInfo "ステータスを変える付箋をクリックして選んでから押してください。" & vbCrLf & _
-                 "（Ctrl キーを押しながらクリックすると、複数の付箋を選べます）"
+                 "（Shift キーを押しながらクリックすると、複数の付箋を選べます）"
         Exit Sub
     End If
     ChangeStatus notes, delta, 0
@@ -177,41 +194,160 @@ EH:
     FailOp "ステータスの変更", Err.Number, Err.Description
 End Sub
 
-' 付箋の右上のステータスボタン：次のステータスへ進める
-Public Sub Note_TagClick()
-    Dim g As Shape
+'==============================================================
+'  付箋のクリック・ドラッグ
+'==============================================================
+
+' 付箋をクリックしたとき（付箋のどの部品をクリックしてもこのマクロが動く。
+' シートを保護しているので、部品を直接動かしたり書き換えたりはできない）
+'   ・ドラッグ … 付箋を動かす（選んでいる付箋はまとめて動かす）
+'   ・右上のステータスボタン … 次のステータスへ進める
+'   ・それ以外 … 付箋を選ぶ（Shift キーを押しながらだと、選択に加える・外す）
+' このマクロはマウスのボタンを押したときに動くので、離すまでの動きでクリックかドラッグかを決める
+Public Sub Note_Click()
+    Dim part As Shape, g As Shape, ws As Worksheet, sel As Collection, moving As Collection
+    Dim onTag As Boolean, withShift As Boolean, wasSelected As Boolean
     If mBusy Then Exit Sub
     On Error GoTo EH
-    Set g = ClickedNote()   ' 名前の重なりに左右されないよう、先にクリックした付箋を特定しておく
-    If Not BeginOp() Then Exit Sub
-    If Not g Is Nothing Then
-        If g.Parent.Name = shBoard.Name Then ChangeStatus OneNote(g), 1, 0
+    Set part = ClickedPart()   ' 名前の重なりに左右されないよう、先にクリックした図形を特定しておく
+    If part Is Nothing Then Exit Sub
+    Set g = NoteFromShape(part)
+    If g Is Nothing Then Exit Sub
+    Set ws = g.Parent
+    mBusy = True
+    ProtectNotes ws
+    withShift = (GetKeyState(VK_SHIFT) < 0)
+    onTag = (RoleOf(part) = ROLE_TAG And ws.Name = shBoard.Name)
+    Set sel = SelectedNotes(ws)
+    wasSelected = HasNote(sel, g)
+
+    ' ステータスボタンはクリックしても選択を変えない。それ以外は押したときに選ぶ
+    If Not wasSelected And Not onTag Then
+        g.Select Replace:=Not withShift
+        Set sel = SelectedNotes(ws)
     End If
-    EndOp
+    If HasNote(sel, g) Then Set moving = sel Else Set moving = OneNote(g)
+
+    If DragNotes(ws, moving) Then
+        If Not HasNote(SelectedNotes(ws), g) Then g.Select Replace:=Not withShift
+    ElseIf onTag Then
+        mBusy = False
+        If BeginOp() Then
+            ChangeStatus OneNote(g), 1, 0
+            EndOp
+        End If
+        Exit Sub
+    ElseIf wasSelected Then
+        If withShift Then UnselectNote ws, g Else g.Select
+    End If
+    mBusy = False
     Exit Sub
 EH:
-    FailOp "ステータスの変更", Err.Number, Err.Description
+    FailOp "付箋の操作", Err.Number, Err.Description
 End Sub
 
-' クリックされたステータスボタンの付箋
-Private Function ClickedNote() As Shape
-    Dim caller As String, pt As PointApi, hit As Object, g As Shape
+' クリックされた図形（付箋の部品）
+Private Function ClickedPart() As Shape
+    Dim caller As String, pt As PointApi, hit As Object, s As Shape
     If TypeName(Application.Caller) <> "String" Then Exit Function
     caller = Application.Caller
-    ' マウスの位置にある図形から求める（コピーで同じ名前の付箋があっても正しく選べる）
+    ' マウスの位置にある図形から求める（同じ名前の付箋があっても正しく選べる）
     On Error Resume Next
     If GetCursorPos(pt) <> 0 Then
         Set hit = ActiveWindow.RangeFromPoint(pt.X, pt.Y)
         If Not hit Is Nothing Then
             If TypeName(hit) <> "Range" Then
-                If hit.Name = caller Then Set g = NoteFromShape(hit.ShapeRange.Item(1))
+                If hit.Name = caller Then Set s = hit.ShapeRange.Item(1)
             End If
         End If
     End If
-    On Error GoTo 0
     ' 見つからなければ名前から求める
-    If g Is Nothing Then Set g = NoteByShapeName(ActiveSheet, caller)
-    Set ClickedNote = g
+    If s Is Nothing Then Set s = ActiveSheet.Shapes(caller)
+    On Error GoTo 0
+    Set ClickedPart = s
+End Function
+
+Private Function HasNote(ByVal notes As Collection, ByVal g As Shape) As Boolean
+    Dim x As Shape
+    For Each x In notes
+        If x.ID = g.ID Then
+            HasNote = True
+            Exit Function
+        End If
+    Next
+End Function
+
+' 選んでいる付箋から g を外す（ほかに残らなければセルを選ぶ）
+Private Sub UnselectNote(ByVal ws As Worksheet, ByVal g As Shape)
+    Dim x As Shape, first As Boolean
+    first = True
+    For Each x In SelectedNotes(ws)
+        If x.ID <> g.ID Then
+            x.Select Replace:=first
+            first = False
+        End If
+    Next
+    If first Then g.TopLeftCell.Select
+End Sub
+
+' マウスのボタンを離すまで付箋を一緒に動かす。動かしたら True
+' （見出し・ボタンの段より上へは出さない。Esc キーを押すと元の位置に戻してやめる）
+Private Function DragNotes(ByVal ws As Worksheet, ByVal notes As Collection) As Boolean
+    Dim btn As Long, p0 As PointApi, p As PointApi, kx As Double, ky As Double
+    Dim x0() As Single, y0() As Single, minX As Single, minY As Single, topY As Single
+    Dim dx As Single, dy As Single, i As Long, g As Shape, dragging As Boolean, canceled As Boolean
+    btn = VK_LBUTTON
+    If GetSystemMetrics(SM_SWAPBUTTON) <> 0 Then btn = VK_RBUTTON
+    If GetCursorPos(p0) = 0 Then Exit Function
+    ' 画面の 1 ピクセルが何 pt か（シートの拡大率・画面の拡大率を含む）
+    With ActiveWindow.Panes(ActiveWindow.Panes.Count)
+        kx = 1000# / (.PointsToScreenPixelsX(1000) - .PointsToScreenPixelsX(0))
+        ky = 1000# / (.PointsToScreenPixelsY(1000) - .PointsToScreenPixelsY(0))
+    End With
+    ReDim x0(1 To notes.Count)
+    ReDim y0(1 To notes.Count)
+    For Each g In notes
+        i = i + 1
+        x0(i) = g.Left
+        y0(i) = g.Top
+        If i = 1 Or x0(i) < minX Then minX = x0(i)
+        If i = 1 Or y0(i) < minY Then minY = y0(i)
+    Next
+    topY = ws.Rows(FIRST_ROW).Top
+
+    Do While (GetAsyncKeyState(btn) And &H8000) <> 0
+        GetCursorPos p
+        If Not dragging Then
+            If Abs(p.X - p0.X) > GetSystemMetrics(SM_CXDRAG) Or Abs(p.Y - p0.Y) > GetSystemMetrics(SM_CYDRAG) Then
+                dragging = True
+                For Each g In notes
+                    g.ZOrder msoBringToFront
+                Next
+            End If
+        End If
+        If dragging Then
+            canceled = ((GetAsyncKeyState(VK_ESCAPE) And &H8000) <> 0)
+            If canceled Then
+                dx = 0
+                dy = 0
+            Else
+                dx = (p.X - p0.X) * kx
+                dy = (p.Y - p0.Y) * ky
+                If minX + dx < 0 Then dx = -minX
+                If minY + dy < topY Then dy = topY - minY
+            End If
+            i = 0
+            For Each g In notes
+                i = i + 1
+                g.Left = x0(i) + dx
+                g.Top = y0(i) + dy
+            Next
+            If canceled Then Exit Do
+        End If
+        DoEvents
+        Sleep 10
+    Loop
+    DragNotes = dragging
 End Function
 
 ' ステータスの見出し：選んでいる付箋をそのステータスにする
@@ -333,7 +469,7 @@ Private Sub DiscardSelected(ByVal ws As Worksheet)
     If notes.Count = 0 Then
         EndOp
         ShowInfo "捨てる付箋をクリックして選んでから押してください。" & vbCrLf & _
-                 "（Ctrl キーを押しながらクリックすると、複数の付箋を選べます）"
+                 "（Shift キーを押しながらクリックすると、複数の付箋を選べます）"
         Exit Sub
     End If
     If notes.Count = 1 Then

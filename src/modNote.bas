@@ -7,6 +7,8 @@ Option Explicit
 '     tag  … ステータスボタン（クリックで次へ）
 '     ttl  … タイトル    body … 内容    memo … 備考    mlbl … 「備考」の文字
 '  付箋の情報（番号・ステータス・日付）はグループの「代替テキスト」に保存する。
+'  付箋を貼るシートは保護して部品を直接さわれないようにし、どの部品をクリックしても
+'  Note_Click（modMain）が動くようにしている（選ぶ・動かす・ステータスを進める）。
 '==============================================================
 
 Public Type NoteData
@@ -46,7 +48,7 @@ Private Const TITLE_MIN_H As Single = 22
 Private Const BODY_MIN_H As Single = 60
 Private Const MEMO_MIN_H As Single = 34
 Private Const MEMO_LABEL_H As Single = 12
-Private Const TAG_MACRO As String = "Note_TagClick"
+Private Const NOTE_MACRO As String = "Note_Click"
 Private Const KIND_TEXTBOX As Long = 0
 
 Private mSeq As Long
@@ -114,14 +116,6 @@ Public Function NoteFromShape(ByVal shp As Shape) As Shape
     If Not p Is Nothing Then
         If IsNote(p) Then Set NoteFromShape = p
     End If
-End Function
-
-Public Function NoteByShapeName(ByVal ws As Worksheet, ByVal nm As String) As Shape
-    Dim s As Shape
-    On Error Resume Next
-    Set s = ws.Shapes(nm)
-    On Error GoTo 0
-    If Not s Is Nothing Then Set NoteByShapeName = NoteFromShape(s)
 End Function
 
 ' 選択中の付箋（複数可）
@@ -401,7 +395,7 @@ Public Function BuildNote(ByVal ws As Worksheet, ByRef d As NoteData, ByVal x As
         .MarginBottom = 0
     End With
 
-    ' ステータスボタン（マクロはグループ化の前に設定しておく必要がある）
+    ' ステータスボタン
     tw = TagWidth()
     Set sTag = AddPart(ws, msoShapeRoundedRectangle, tok, ROLE_TAG, x + w - tw - 4, y + (HDR_H - TAG_H) / 2, tw, TAG_H)
     SetText sTag, TagText(d.StatusIdx, isDone), TAG_SIZE, True
@@ -415,7 +409,6 @@ Public Function BuildNote(ByVal ws As Worksheet, ByRef d As NoteData, ByVal x As
         .TextRange.ParagraphFormat.Alignment = msoAlignCenter
     End With
     sTag.Adjustments.Item(1) = 0.5
-    If Not isDone Then sTag.OnAction = TAG_MACRO
 
     ' タイトル
     yy = y + HDR_H + 2
@@ -453,6 +446,7 @@ Public Function BuildNote(ByVal ws As Worksheet, ByRef d As NoteData, ByVal x As
         grp.GroupItems(i).Name = nm & "_" & RoleOf(grp.GroupItems(i))
     Next
     grp.Placement = xlMove
+    grp.OnAction = NOTE_MACRO   ' グループに設定すると、すべての部品に設定される
     d.Sig = NoteSig(grp)
     WriteMeta grp, d
     PaintNote grp, d.StatusIdx, isDone
@@ -545,6 +539,22 @@ Public Sub RebuildNotes(ByVal ws As Worksheet, ByVal isDone As Boolean, Optional
             BuildNote ws, d, x, y, isDone
         End If
     Next
+End Sub
+
+'==============================================================
+'  シートの保護（付箋の部品を直接さわれないようにする）
+'==============================================================
+
+' 図形だけを保護する（セルは保護しない）。マクロからは変更できるように UserInterfaceOnly で保護する。
+' UserInterfaceOnly はブックを閉じると消えるので、開いたときと操作のたびにかけ直す
+Public Sub ProtectNotes(ByVal ws As Worksheet)
+    If ws.ProtectDrawingObjects And ws.ProtectionMode Then Exit Sub
+    ws.Protect DrawingObjects:=True, Contents:=False, Scenarios:=False, UserInterfaceOnly:=True
+End Sub
+
+Public Sub ProtectBoards()
+    ProtectNotes shBoard
+    ProtectNotes shDone
 End Sub
 
 '==============================================================

@@ -26,6 +26,7 @@ Public Function SetupWorkbook() As String
     BuildToolbars
     CreateSamples
     RefreshLaneCounts
+    ProtectBoards
     shConfig.Activate
     shConfig.Range("B5").Select
     shDone.Activate
@@ -274,14 +275,14 @@ Private Sub SetupHelpSheet()
     HelpLine ""
     HelpLine "■ 書き直す"
     HelpLine "・付箋を選んで［編集］を押すと、入力画面で書き直せます（ステータスも変えられます）。"
-    HelpLine "・付箋の文字をクリックして直接書き直すこともできます。文字があふれたときは［整列］を押すと付箋の大きさが整います。"
+    HelpLine "・付箋の文字を直接書き換えたり、部品を動かしたりはできません（付箋がくずれないよう、シートを保護しています）。"
     HelpLine ""
     HelpLine "■ 整列"
     HelpLine "・［整列］を押すと、付箋がステータスごとに見出しの下へ並びます。見出しのかっこ内は付箋の枚数です。"
     HelpLine ""
-    HelpLine "■ 付箋の選び方"
-    HelpLine "・付箋は1回クリックすると選べます。Ctrl キーを押しながらクリックすると、複数の付箋を選べます。"
-    HelpLine "・付箋をコピーして貼り付けると、新しい番号の付箋になります。"
+    HelpLine "■ 付箋の選び方・動かし方"
+    HelpLine "・付箋は1回クリックすると選べます。Shift キーを押しながらクリックすると、複数の付箋を選べます（もう一度で外れます）。"
+    HelpLine "・複数の付箋を選んでからドラッグすると、まとめて動かせます。"
     HelpLine ""
     HelpLine "■ 設定"
     HelpLine "・「設定」シートで、ステータスの名前・付箋の色・フォント（初期値：Meiryo UI）・文字の大きさなどを変えられます。"
@@ -290,6 +291,7 @@ Private Sub SetupHelpSheet()
     HelpLine ""
     HelpLine "■ ご注意"
     HelpLine "・このブックはマクロを使っています。開いたときに［コンテンツの有効化］を押してください。"
+    HelpLine "・「タスクボード」「完了」シートは、付箋がくずれないように保護しています（解除しても次の操作で保護し直します）。"
     HelpLine "・保存するときは「Excel マクロ有効ブック（*.xlsm）」のまま保存してください。"
 
     Set ws = shHelp
@@ -350,7 +352,7 @@ Public Sub BuildToolbars()
     x = AddButton(ws, "TB_Fwd", "進める " & nx, "Board_StepForward", x, y, 74, False)
     x = AddButton(ws, "TB_Arrange", "整列", "Board_Arrange", x, y, 56, False)
     x = AddButton(ws, "TB_Discard", "捨てる", "Board_Discard", x, y, 62, False)
-    AddHint ws, "TB_Hint", "付箋の右上のボタンをクリックすると、ステータスが進みます。", x + 6, y
+    AddHint ws, "TB_Hint", "付箋の右上のボタンでステータスが進みます（Shift+クリックで複数選択）。", x + 6, y
     n = StatusCount()
     y = ws.Rows(2).Top + 3
     For i = 1 To n

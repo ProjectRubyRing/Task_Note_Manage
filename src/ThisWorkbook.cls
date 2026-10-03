@@ -6,12 +6,14 @@ Option Explicit
 Private Sub Workbook_Open()
     On Error Resume Next
     ConfigRefresh
+    ProtectBoards
     NormalizeNotes
     RefreshLaneCounts
 End Sub
 
 Private Sub Workbook_SheetActivate(ByVal Sh As Object)
     On Error Resume Next
+    If Sh.Name = shBoard.Name Or Sh.Name = shDone.Name Then ProtectNotes Sh
     If Sh.Name = shBoard.Name Then
         ConfigRefresh
         RefreshLaneCounts
