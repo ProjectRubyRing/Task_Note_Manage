@@ -637,13 +637,15 @@ Private Function EditByForm(ByRef d As NoteData, ByVal isNew As Boolean) As Bool
     Next
     If isNew Then
         formCaption = "新しい付箋"
+        infoText = "起票日時は［OK］を押したときの日時が自動で入ります。"
     Else
         formCaption = "付箋の編集"
-        infoText = "No." & Format$(d.Id, "0000") & "　　起票 " & Format$(d.Created, "yyyy/m/d") & _
-                   "　　更新 " & Format$(d.Updated, "yyyy/m/d")
+        infoText = "No." & Format$(d.Id, "0000") & "　　起票日時 " & Format$(d.Created, "yyyy/mm/dd hh:nn") & _
+                   "　　更新 " & Format$(d.Updated, "yyyy/mm/dd hh:nn")
     End If
     Set f = New frmNote
-    f.Prepare formCaption, infoText, d.Title, d.Body, d.Memo, stNames, stColors, d.StatusIdx
+    f.Prepare formCaption, infoText, d.Title, d.Body, d.Memo, stNames, stColors, d.StatusIdx, _
+              d.StartDate, d.EndDate, d.Progress
     Application.ScreenUpdating = True
     f.Show
     Application.ScreenUpdating = False
@@ -652,6 +654,9 @@ Private Function EditByForm(ByRef d As NoteData, ByVal isNew As Boolean) As Bool
         d.Body = f.BodyText
         d.Memo = f.MemoText
         d.StatusIdx = f.StatusIndex
+        d.StartDate = f.StartDay
+        d.EndDate = f.EndDay
+        d.Progress = f.ProgressPct
         EditByForm = True
     End If
     Unload f

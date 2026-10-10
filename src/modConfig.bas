@@ -151,6 +151,11 @@ Public Function SizeTitle() As Single
     SizeTitle = CfgNum("cfgSizeTitle", 10.5, 6, 24)
 End Function
 
+' タイトルの欄の高さ（タイトルの文字サイズで何行分か）。入りきらないタイトルは文字を小さくする
+Public Function TitleLines() As Long
+    TitleLines = CLng(CfgNum("cfgTitleLines", 2, 1, 5))
+End Function
+
 Public Function SizeBody() As Single
     SizeBody = CfgNum("cfgSizeBody", 9, 6, 20)
 End Function

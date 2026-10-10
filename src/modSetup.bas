@@ -92,48 +92,59 @@ Private Sub SetupConfigSheet()
 
     ' ステータス
     ws.Range("B4:D4").Value = Array("ステータス名", "色", "説明")
-    st = Array("起票済み", "対応中", "対応済み", "連携済み", "完了")
-    cl = Array(RGB(255, 241, 140), RGB(255, 196, 214), RGB(176, 222, 250), RGB(196, 230, 164), RGB(217, 217, 217))
+    st = Array("起票済み", "一般タスク対応中", "一般タスク対応済み", _
+               "レビュー依頼受領済み", "レビュー対応中", "レビュー済み対応依頼中", "レビュー済み", _
+               "連携済み", "完了")
+    cl = Array(RGB(255, 241, 140), RGB(255, 196, 214), RGB(176, 222, 250), _
+               RGB(216, 204, 248), RGB(255, 207, 153), RGB(250, 172, 160), RGB(168, 230, 212), _
+               RGB(196, 230, 164), RGB(217, 217, 217))
     ds = Array("タスクを書き出した状態。新しい付箋はこの色で貼られます。", _
-               "対応を進めている状態。", _
-               "対応が終わった状態。", _
+               "一般タスクの対応を進めている状態。", _
+               "一般タスクの対応が終わった状態。", _
+               "レビューの依頼を受け取った状態。", _
+               "レビューを進めている状態。", _
+               "レビューが終わり、指摘への対応を依頼している状態。", _
+               "レビューが終わった状態。", _
                "関係する人へ連携した状態。", _
                "完了。付箋はグレーアウトして「完了」シートへ移動します。")
-    For i = 0 To 4
+    For i = 0 To UBound(st)
         ws.Cells(5 + i, 2).Value = st(i)
         ws.Cells(5 + i, 3).Interior.Color = cl(i)
         ws.Cells(5 + i, 4).Value = ds(i)
     Next
     StyleHeader ws.Range("B4:D4")
-    StyleTable ws.Range("B5:D9")
+    StyleTable ws.Range(ws.Cells(5, 2), ws.Cells(5 + UBound(st), 4))
 
     ' その他
     ws.Range("F4:G4").Value = Array("項目", "値")
-    items = Array("フォント", "付箋の幅（pt）", "タイトルの文字サイズ", "内容の文字サイズ", "備考の文字サイズ", "完了時に確認する")
-    For i = 0 To 5
+    items = Array("フォント", "付箋の幅（pt）", "タイトルの文字サイズ", "タイトルの最大行数", _
+                  "内容の文字サイズ", "備考の文字サイズ", "完了時に確認する")
+    For i = 0 To UBound(items)
         ws.Cells(5 + i, 6).Value = items(i)
     Next
     ws.Range("G5").Value = DEFAULT_FONT
     ws.Range("G6").Value = 180
     ws.Range("G7").Value = 10.5
-    ws.Range("G8").Value = 9
-    ws.Range("G9").Value = 8
-    ws.Range("G10").Value = "はい"
-    With ws.Range("G10").Validation
+    ws.Range("G8").Value = 2
+    ws.Range("G9").Value = 9
+    ws.Range("G10").Value = 8
+    ws.Range("G11").Value = "はい"
+    With ws.Range("G11").Validation
         .Delete
         .Add Type:=xlValidateList, AlertStyle:=xlValidAlertStop, Formula1:="はい," & CONFIRM_NO
     End With
     StyleHeader ws.Range("F4:G4")
-    StyleTable ws.Range("F5:G10")
-    ws.Range("G5:G10").HorizontalAlignment = xlLeft
+    StyleTable ws.Range("F5:G11")
+    ws.Range("G5:G11").HorizontalAlignment = xlLeft
 
     AddName "cfgStatusTop", ws.Range("B5")
     AddName "cfgFont", ws.Range("G5")
     AddName "cfgWidth", ws.Range("G6")
     AddName "cfgSizeTitle", ws.Range("G7")
-    AddName "cfgSizeBody", ws.Range("G8")
-    AddName "cfgSizeMemo", ws.Range("G9")
-    AddName "cfgConfirm", ws.Range("G10")
+    AddName "cfgTitleLines", ws.Range("G8")
+    AddName "cfgSizeBody", ws.Range("G9")
+    AddName "cfgSizeMemo", ws.Range("G10")
+    AddName "cfgConfirm", ws.Range("G11")
 
     ws.Activate
     ActiveWindow.DisplayGridlines = False
@@ -260,12 +271,17 @@ Private Sub SetupHelpSheet()
     HelpLine ""
     HelpLine "■ 付箋を貼る"
     HelpLine "・「タスクボード」シートの［＋ 新しい付箋］を押して、タイトル・内容・備考（関係する実装など）を入力し、［OK］を押します。"
+    HelpLine "・備考の下の欄で、開始日・終了日・進捗率も入力できます（空欄のままでもかまいません。［今日］で今日の日付が入ります）。"
     HelpLine "・黄色の付箋（起票済み）がボードに貼られます。付箋はドラッグして好きな場所へ動かせます。"
+    HelpLine "・付箋の備考の下に、起票日時（付箋を作った日時。自動で入ります）・開始日・終了日・進捗率が表示されます。"
+    HelpLine "・タイトルは付箋に全文が表示されます。タイトルの欄（「設定」シートの「タイトルの最大行数」）に入りきらないときは、文字が自動で小さくなります。"
     HelpLine ""
     HelpLine "■ ステータスを進める（付箋の色が変わります）"
     HelpLine "・付箋の右上のボタン（例：「起票済み " & nx & "」）をクリックすると、次のステータスに進んで付箋の色が変わります。"
-    HelpLine "　　起票済み（黄）→ 対応中（ピンク）→ 対応済み（水色）→ 連携済み（緑）→ 完了（グレー）　※初期設定の色"
-    HelpLine "・付箋を選んでから、上の見出し（起票済み・対応中 …）をクリックすると、そのステータスに直接変えられます。"
+    HelpLine "　　起票済み（黄）→ 一般タスク対応中（ピンク）→ 一般タスク対応済み（水色）→ レビュー依頼受領済み（紫）→ レビュー対応中（オレンジ）"
+    HelpLine "　　→ レビュー済み対応依頼中（サーモン）→ レビュー済み（ミント）→ 連携済み（緑）→ 完了（グレー）　※初期設定の色"
+    HelpLine "・付箋を選んでから、上の見出し（起票済み・一般タスク対応中 …）をクリックすると、そのステータスに直接変えられます。"
+    HelpLine "　　使わないステータスを飛ばすときに使います（例：一般タスクの付箋は「一般タスク対応済み」から「連携済み」の見出しへ）。"
     HelpLine "・間違えたときは、付箋を選んで［" & pv & " 戻す］を押します。［進める " & nx & "］で選んだ付箋をまとめて進めることもできます。"
     HelpLine ""
     HelpLine "■ 完了"
@@ -274,7 +290,7 @@ Private Sub SetupHelpSheet()
     HelpLine "・いらなくなった付箋は、選んで［捨てる］を押すと削除できます。"
     HelpLine ""
     HelpLine "■ 書き直す"
-    HelpLine "・付箋を選んで［編集］を押すと、入力画面で書き直せます（ステータスも変えられます）。"
+    HelpLine "・付箋を選んで［編集］を押すと、入力画面で書き直せます（開始日・終了日・進捗率・ステータスも変えられます）。"
     HelpLine "・付箋の文字を直接書き換えたり、部品を動かしたりはできません（付箋がくずれないよう、シートを保護しています）。"
     HelpLine ""
     HelpLine "■ 整列"
@@ -285,7 +301,7 @@ Private Sub SetupHelpSheet()
     HelpLine "・複数の付箋を選んでからドラッグすると、まとめて動かせます。"
     HelpLine ""
     HelpLine "■ 設定"
-    HelpLine "・「設定」シートで、ステータスの名前・付箋の色・フォント（初期値：Meiryo UI）・文字の大きさなどを変えられます。"
+    HelpLine "・「設定」シートで、ステータスの名前・順番・付箋の色・フォント（初期値：Meiryo UI）・文字の大きさなどを変えられます。"
     HelpLine "・変更したら、「設定」シートの［設定を反映］を押してください。"
     HelpLine "・ボタンや見出しを消してしまったときも、［設定を反映］を押すと作り直されます。"
     HelpLine ""
@@ -406,8 +422,15 @@ End Function
 
 Private Sub AddLane(ByVal ws As Worksheet, ByVal i As Long, ByVal x As Single, ByVal y As Single, _
                     ByVal w As Single, ByVal h As Single)
-    Dim s As Shape, c As Long
+    Dim s As Shape, c As Long, sz As Single, need As Single
     c = StatusColor(i)
+    ' 長いステータス名が入りきらないときは文字を小さくする（枚数は 2 桁まで入るようにする）
+    sz = 9.5
+    need = EstTextWidth(LaneCaption(i, 99), sz)
+    If need > w - 8 Then
+        sz = Int(sz * (w - 8) / need * 2) / 2
+        If sz < 6 Then sz = 6
+    End If
     Set s = ws.Shapes.AddShape(msoShapeRoundedRectangle, x, y, w, h)
     s.Name = LANE_PREFIX & i
     s.Placement = xlFreeFloating
@@ -419,7 +442,7 @@ Private Sub AddLane(ByVal ws As Worksheet, ByVal i As Long, ByVal x As Single, B
     s.Line.ForeColor.RGB = ShadeColor(c, 0.25)
     s.Line.Weight = 0.75
     s.Shadow.Visible = msoFalse
-    StyleCaption s, LaneCaption(i, 0), 9.5, True, TextColorOn(c)
+    StyleCaption s, LaneCaption(i, 0), sz, True, TextColorOn(c)
     s.OnAction = "Lane_Click"
 End Sub
 
@@ -469,20 +492,27 @@ End Sub
 '  サンプルの付箋
 '==============================================================
 
+' ステータスの番号は SetupConfigSheet の並び（1 起票済み … 5 レビュー対応中 … 8 連携済み、9 完了）
 Private Sub CreateSamples()
     Dim d As NoteData
     Sample 1, 6, "（サンプル）付箋の使い方", _
            "右上の「" & StatusName(1) & " " & ChrW$(&H25B6) & "」をクリックすると、ステータスが進んで付箋の色が変わります。", _
-           "サンプルの付箋は、選んで［捨てる］で削除できます。"
+           "サンプルの付箋は、選んで［捨てる］で削除できます。", 0, 0, 0
     Sample 2, 4, "（サンプル）ログイン画面の修正", _
            "パスワードを間違えたときのメッセージを分かりやすくする。", _
-           "LoginForm.ValidatePassword()"
-    Sample 3, 3, "（サンプル）請求書PDFのレイアウト変更", _
+           "LoginForm.ValidatePassword()", Date - 2, Date + 3, 40
+    Sample 3, 5, "（サンプル）請求書PDFのレイアウト変更", _
            "ロゴの位置と明細の列幅を調整する。", _
-           "ReportService.ExportInvoice"
-    Sample 4, 2, "（サンプル）API仕様の変更を共有", _
+           "ReportService.ExportInvoice", Date - 4, Date - 1, 100
+    Sample 4, 1, "（サンプル）在庫引当バッチの性能改善とリトライ処理の見直しに関するプルリクエストのレビュー依頼", _
+           "タイトルが長くて欄に入りきらないときは、全文が見えるように文字が自動で小さくなります。", _
+           "batch/StockAllocator.java", Date + 1, Date + 2, 0
+    Sample 5, 2, "（サンプル）受注APIのコードレビュー", _
+           "受注登録APIの入力チェックと例外処理をレビューする。", _
+           "OrderController.Create()", Date - 1, Date + 1, 60
+    Sample 8, 3, "（サンプル）API仕様の変更を共有", _
            "取引先APIの変更点を関係チームへ連携した。", _
-           "docs/api/v2.md"
+           "docs/api/v2.md", Date - 3, Date - 2, 100
 
     d.Id = NextNoteId()
     d.Title = "（サンプル）環境構築の手順書"
@@ -492,11 +522,15 @@ Private Sub CreateSamples()
     d.Created = Now - 9
     d.Done = Now - 1
     d.Updated = d.Done
+    d.StartDate = Date - 8
+    d.EndDate = Date - 2
+    d.Progress = 100
     BuildNote shDone, d, OriginX(shDone), OriginY(shDone), True
     ArrangeDoneSheet False
 End Sub
 
-Private Sub Sample(ByVal si As Long, ByVal daysAgo As Long, ByVal t As String, ByVal b As String, ByVal m As String)
+Private Sub Sample(ByVal si As Long, ByVal daysAgo As Long, ByVal t As String, ByVal b As String, ByVal m As String, _
+                   ByVal sd As Date, ByVal ed As Date, ByVal pct As Long)
     Dim d As NoteData
     d.Id = NextNoteId()
     d.Title = t
@@ -505,5 +539,8 @@ Private Sub Sample(ByVal si As Long, ByVal daysAgo As Long, ByVal t As String, B
     d.StatusIdx = si
     d.Created = Now - daysAgo
     d.Updated = Now
+    d.StartDate = sd
+    d.EndDate = ed
+    d.Progress = pct
     PlaceInLane shBoard, d, si
 End Sub

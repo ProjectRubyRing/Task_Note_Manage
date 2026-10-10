@@ -6,7 +6,9 @@ Option Explicit
 '     base … 台紙（付箋の色・影）       hdr  … 見出し帯（番号・日付）
 '     tag  … ステータスボタン（クリックで次へ）
 '     ttl  … タイトル    body … 内容    memo … 備考    mlbl … 「備考」の文字
-'  付箋の情報（番号・ステータス・日付）はグループの「代替テキスト」に保存する。
+'     info … 起票日時・開始日・終了日    prog … 進捗率の文字
+'     pbar … 進捗率のバーの枠            pfill … バーの塗り（進捗率が 0% のときは作らない）
+'  付箋の情報（番号・ステータス・日付・進捗率）はグループの「代替テキスト」に保存する。
 '  付箋を貼るシートは保護して部品を直接さわれないようにし、どの部品をクリックしても
 '  Note_Click（modMain）が動くようにしている（選ぶ・動かす・ステータスを進める）。
 '==============================================================
@@ -17,9 +19,12 @@ Public Type NoteData
     Body As String
     Memo As String
     StatusIdx As Long
-    Created As Date
+    Created As Date         ' 起票日時（新しい付箋を作ったときに自動で入る）
     Updated As Date
     Done As Date
+    StartDate As Date       ' 開始日（0 = 未入力）
+    EndDate As Date         ' 終了日（0 = 未入力）
+    Progress As Long        ' 進捗率（0～100）
     HasPos As Boolean       ' 完了前にボードで貼られていた位置を持っているか
     PosLeft As Single
     PosTop As Single
@@ -39,19 +44,39 @@ Public Const ROLE_TITLE As String = "ttl"
 Public Const ROLE_BODY As String = "body"
 Public Const ROLE_MEMO As String = "memo"
 Public Const ROLE_LABEL As String = "mlbl"
+Public Const ROLE_INFO As String = "info"
+Public Const ROLE_PROG As String = "prog"
+Public Const ROLE_PBAR As String = "pbar"
+Public Const ROLE_PFILL As String = "pfill"
 
 Private Const HDR_H As Single = 20
 Private Const TAG_H As Single = 15
 Private Const TAG_SIZE As Single = 7.5
+Private Const TAG_MIN_SIZE As Single = 5
 Private Const HDR_SIZE As Single = 7.5
 Private Const TITLE_MIN_H As Single = 22
+Private Const TITLE_MIN_SIZE As Single = 6  ' タイトルを小さくするときの下限
+Private Const TITLE_FIT_TOL As Single = 2   ' 欄に入ったとみなす高さの余裕（置いた位置による 1～2 ピクセルの丸めの差。1 行は 10pt 以上）
+Private Const TEXT_SLACK As Single = 0.06   ' 折り返す文字の高さを測るときに狭める幅の割合（TextHeight）
 Private Const BODY_MIN_H As Single = 60
 Private Const MEMO_MIN_H As Single = 34
 Private Const MEMO_LABEL_H As Single = 12
+Private Const INFO_SIZE As Single = 7.5     ' 起票日時・開始日・終了日・進捗率の文字サイズ
+Private Const INFO_TAB As Single = 36       ' 見出し（起票日時 など）のあとの値を揃える位置
+Private Const PCT_W As Single = 26          ' 進捗率の「100%」の文字の分
+Private Const PBAR_H As Single = 6
 Private Const NOTE_MACRO As String = "Note_Click"
 Private Const KIND_TEXTBOX As Long = 0
 
+Private Const LBL_CREATED As String = "起票日時"
+Private Const LBL_START As String = "開始日"
+Private Const LBL_END As String = "終了日"
+Private Const LBL_PROGRESS As String = "進捗率"
+Private Const NO_VALUE As String = "―"
+
 Private mSeq As Long
+Private mAreaKey As String      ' タイトルの欄の高さを測ったときの設定
+Private mAreaH As Single
 
 '==============================================================
 '  識別
@@ -160,7 +185,8 @@ Public Sub WriteMeta(ByVal grp As Shape, ByRef d As NoteData)
     Dim s As String
     s = NOTE_MARK & ";id=" & d.Id & ";st=" & MetaSafe(StatusName(ClampStatus(d.StatusIdx))) & _
         ";si=" & d.StatusIdx & ";cr=" & IsoText(d.Created) & ";up=" & IsoText(d.Updated) & _
-        ";dn=" & IsoText(d.Done) & ";tx=" & d.Sig
+        ";dn=" & IsoText(d.Done) & ";sd=" & IsoDay(d.StartDate) & ";ed=" & IsoDay(d.EndDate) & _
+        ";pg=" & ClampPct(d.Progress) & ";tx=" & d.Sig
     If d.HasPos Then s = s & ";px=" & NumText(d.PosLeft) & ";py=" & NumText(d.PosTop)
     grp.AlternativeText = s
 End Sub
@@ -173,6 +199,9 @@ Public Function ReadNote(ByVal grp As Shape) As NoteData
     d.Created = ParseIso(MetaGet(m, "cr"))
     d.Updated = ParseIso(MetaGet(m, "up"))
     d.Done = ParseIso(MetaGet(m, "dn"))
+    d.StartDate = ParseIso(MetaGet(m, "sd"))
+    d.EndDate = ParseIso(MetaGet(m, "ed"))
+    d.Progress = ClampPct(Val(MetaGet(m, "pg")))
     px = MetaGet(m, "px")
     If Len(px) > 0 Then
         d.HasPos = True
@@ -204,6 +233,8 @@ End Function
 Private Function NeedsRefit(ByVal grp As Shape) As Boolean
     If Abs(grp.Width - NoteWidth()) > 0.5 Then
         NeedsRefit = True
+    ElseIf PartOf(grp, ROLE_INFO) Is Nothing Then
+        NeedsRefit = True       ' 起票日時などの欄がない（前の版で作った）付箋
     Else
         NeedsRefit = (NoteSig(grp) <> MetaGet(grp.AlternativeText, "tx"))
     End If
@@ -233,9 +264,20 @@ Public Function ClampStatus(ByVal si As Long) As Long
     ClampStatus = si
 End Function
 
+Public Function ClampPct(ByVal v As Double) As Long
+    If v < 0 Then v = 0
+    If v > 100 Then v = 100
+    ClampPct = CLng(v)
+End Function
+
 Private Function IsoText(ByVal dt As Date) As String
     If dt = 0 Then Exit Function
     IsoText = Format$(dt, "yyyy-mm-dd hh:nn:ss")
+End Function
+
+Private Function IsoDay(ByVal dt As Date) As String
+    If dt = 0 Then Exit Function
+    IsoDay = Format$(dt, "yyyy-mm-dd")
 End Function
 
 Private Function ParseIso(ByVal s As String) As Date
@@ -279,6 +321,10 @@ End Function
 Private Sub SetText(ByVal shp As Shape, ByVal txt As String, ByVal sz As Single, ByVal isBold As Boolean)
     Dim fnt As String
     fnt = CfgFont()
+    ' 付箋を動かすと Excel が大きさを画面の点に合わせ直して少し縮むことがある。
+    ' 図形の文字は入りきらない行を隠す設定が既定なので、最後の行が消えないよう、はみ出しても表示する
+    shp.TextFrame.VerticalOverflow = xlOartVerticalOverflowOverflow
+    shp.TextFrame.HorizontalOverflow = xlOartHorizontalOverflowOverflow
     With shp.TextFrame2
         .WordWrap = msoTrue
         .AutoSize = msoAutoSizeNone
@@ -311,23 +357,129 @@ Private Sub ReplaceText(ByVal shp As Shape, ByVal txt As String, ByVal sz As Sin
     End With
 End Sub
 
+' 文字がちょうど収まる高さを測る。slack > 0 なら、文字を入れる幅をその割合だけ狭めて測る
+' （表示の拡大率を下げると文字の幅が少し広がり、折り返しが 1 行増えることがあるので、その分の余裕を見る）
+Private Function TextHeight(ByVal shp As Shape, Optional ByVal slack As Single = 0) As Single
+    Dim t As Single, mr As Single
+    t = shp.Top
+    With shp.TextFrame2
+        mr = .MarginRight
+        If slack > 0 Then .MarginRight = mr + (shp.Width - .MarginLeft - mr) * slack
+        .AutoSize = msoAutoSizeShapeToFitText
+        TextHeight = shp.Height
+        .AutoSize = msoAutoSizeNone
+        .MarginRight = mr
+    End With
+    shp.Top = t
+End Function
+
 ' 文字が収まる高さにする（最小 minH）
-Private Sub FitHeight(ByVal shp As Shape, ByVal minH As Single)
+Private Sub FitHeight(ByVal shp As Shape, ByVal minH As Single, Optional ByVal slack As Single = 0)
     Dim t As Single, h As Single
     t = shp.Top
-    shp.TextFrame2.AutoSize = msoAutoSizeShapeToFitText
-    h = shp.Height
-    shp.TextFrame2.AutoSize = msoAutoSizeNone
+    h = TextHeight(shp, slack)
     If h < minH Then h = minH
     shp.Height = h
     shp.Top = t
 End Sub
 
-Private Function HeaderText(ByRef d As NoteData, ByVal isDone As Boolean) As String
+' タイトルの欄の高さ（タイトルの文字サイズで TitleLines 行分）。設定が同じあいだは測った値を使う
+Private Function TitleAreaHeight(ByVal shp As Shape) As Single
+    Dim key As String, s As String, i As Long
+    key = CfgFont() & "|" & SizeTitle() & "|" & TitleLines() & "|" & Format$(shp.Width, "0.0")
+    If key <> mAreaKey Then
+        s = "あ"
+        For i = 2 To TitleLines()
+            s = s & vbLf & "あ"
+        Next
+        SetText shp, s, SizeTitle(), True
+        mAreaH = TextHeight(shp)
+        mAreaKey = key
+    End If
+    TitleAreaHeight = mAreaH
+End Function
+
+' タイトルを入れて高さを決める。全文を表示し、欄に入らないときは入るまで文字を小さくする
+' （いちばん小さくしても入らないときは、欄を広げて全文を表示する）
+Private Sub FitTitle(ByVal shp As Shape, ByVal txt As String)
+    Dim areaH As Single, h As Single, lo As Long, hi As Long, md As Long
+    areaH = TitleAreaHeight(shp)
+    SetText shp, txt, SizeTitle(), True
+    h = TextHeight(shp, TEXT_SLACK)
+    If h > areaH + TITLE_FIT_TOL Then
+        ' 0.5pt 刻みで、欄に入るいちばん大きい文字サイズを探す（lo, hi は pt の 2 倍。hi の大きさでは入らない）
+        lo = CLng(TITLE_MIN_SIZE * 2)
+        hi = -Int(-SizeTitle() * 2)
+        Do While hi - lo > 1
+            md = (lo + hi) \ 2
+            shp.TextFrame2.TextRange.Font.Size = md / 2
+            If TextHeight(shp, TEXT_SLACK) <= areaH + TITLE_FIT_TOL Then lo = md Else hi = md
+        Loop
+        shp.TextFrame2.TextRange.Font.Size = lo / 2
+        h = TextHeight(shp, TEXT_SLACK)
+    End If
+    If h < TITLE_MIN_H Then h = TITLE_MIN_H
+    shp.Height = h
+    ' 幅を狭めて測った分、表示では 1 行少なく収まることがあるので、上下の中央に置く
+    shp.TextFrame2.VerticalAnchor = msoAnchorMiddle
+End Sub
+
+' 起票日時・開始日・終了日の欄の文字（開始日と終了日は、幅に入れば 1 行に並べる）
+Private Function InfoText(ByRef d As NoteData, ByVal w As Single) As String
+    Dim s As String, sd As String, ed As String, pair As String
+    If d.Created > 0 Then s = Format$(d.Created, "yyyy/mm/dd hh:nn") Else s = NO_VALUE
+    s = LBL_CREATED & vbTab & s
+    sd = DayText(d.StartDate)
+    ed = DayText(d.EndDate)
+    pair = sd & "　" & LBL_END & " " & ed
+    If INFO_TAB + EstTextWidth(pair, INFO_SIZE) * (1 + TEXT_SLACK) <= w - 12 Then
+        InfoText = s & vbLf & LBL_START & vbTab & pair
+    Else
+        InfoText = s & vbLf & LBL_START & vbTab & sd & vbLf & LBL_END & vbTab & ed
+    End If
+End Function
+
+Private Function ProgressText(ByVal pct As Long) As String
+    ProgressText = LBL_PROGRESS & vbTab & vbTab & pct & "%"
+End Function
+
+Private Function DayText(ByVal dt As Date) As String
+    If dt = 0 Then DayText = NO_VALUE Else DayText = Format$(dt, "yyyy/mm/dd")
+End Function
+
+' 起票日時・進捗率の欄の書式：見出しのあとの値を揃え、進捗率の % は右端に揃える
+Private Sub StyleInfo(ByVal shp As Shape, ByVal w As Single, ByVal padTop As Single)
+    With shp.TextFrame2
+        .MarginTop = padTop
+        .MarginBottom = 0
+        .TextRange.ParagraphFormat.TabStops.Add msoTabStopLeft, INFO_TAB
+        .TextRange.ParagraphFormat.TabStops.Add msoTabStopRight, w - .MarginLeft - .MarginRight
+    End With
+End Sub
+
+' 見出し（起票日時・開始日・終了日・進捗率）を太字・指定の色にする
+Private Sub MarkLabels(ByVal shp As Shape, ByVal c As Long)
+    Dim t As String, lb As Variant, p As Long
+    t = shp.TextFrame2.TextRange.Text
+    For Each lb In Array(LBL_CREATED, LBL_START, LBL_END, LBL_PROGRESS)
+        p = InStr(t, lb)
+        If p > 0 Then
+            With shp.TextFrame2.TextRange.Characters(p, Len(lb)).Font
+                .Bold = msoTrue
+                .Fill.ForeColor.RGB = c
+            End With
+        End If
+    Next
+End Sub
+
+' 見出し帯の文字（番号・起票日。完了の付箋は完了日も）。withDates = False なら番号だけ
+Private Function HeaderText(ByRef d As NoteData, ByVal isDone As Boolean, ByVal withDates As Boolean) As String
     Dim s As String
     s = "No." & Format$(d.Id, "0000")
-    If d.Created > 0 Then s = s & "   " & Format$(d.Created, "m/d")
-    If isDone And d.Done > 0 Then s = s & " → " & Format$(d.Done, "m/d")
+    If withDates Then
+        If d.Created > 0 Then s = s & "   " & Format$(d.Created, "m/d")
+        If isDone And d.Done > 0 Then s = s & " → " & Format$(d.Done, "m/d")
+    End If
     HeaderText = s
 End Function
 
@@ -339,17 +491,42 @@ Private Function TagText(ByVal si As Long, ByVal isDone As Boolean) As String
     End If
 End Function
 
-' ステータスボタンの幅（いちばん長いステータス名に合わせる）
-Private Function TagWidth() As Single
-    Dim i As Long, w As Single, m As Single
-    m = 46
-    For i = 1 To StatusCount()
-        w = EstTextWidth(StatusName(i) & " " & ChrW$(&H25B6), TAG_SIZE) + 14
-        If w > m Then m = w
-    Next
-    If m > NoteWidth() / 2 Then m = NoteWidth() / 2
-    TagWidth = m
-End Function
+' ステータスボタンの幅 tw と文字サイズ sz、見出し帯に日付を出すか withDates
+'   ボードの付箋 … どのステータスでも同じ幅（いちばん長いステータス名に合わせる）
+'   完了の付箋   … 「完了」の文字に合わせた幅
+' 見出し帯の文字と重ならない幅までにする。日付まで出すとボタンの文字が入らないときは番号だけにし、
+' それでも入らない文字は小さくする
+Private Sub TagMetrics(ByRef d As NoteData, ByVal isDone As Boolean, ByRef tw As Single, ByRef sz As Single, _
+                       ByRef withDates As Boolean)
+    Dim i As Long, n As Long, w As Single, need As Single, hw As Single, mx As Single
+    n = StatusCount()
+    If isDone Then
+        need = EstTextWidth(TagText(n, True), TAG_SIZE)
+    Else
+        For i = 1 To n - 1
+            w = EstTextWidth(TagText(i, False), TAG_SIZE)
+            If w > need Then need = w
+        Next
+    End If
+    tw = need + 14
+    If tw < 46 Then tw = 46
+    hw = EstTextWidth(HeaderText(d, isDone, True), HDR_SIZE)
+    If Not isDone Then
+        w = EstTextWidth("No.0000   00/00", HDR_SIZE)     ' 日付の桁数で幅が変わらないように
+        If w > hw Then hw = w
+    End If
+    mx = NoteWidth() - 4 - 6 - hw - 6
+    withDates = (need + 6 <= mx)
+    If Not withDates Then mx = NoteWidth() - 4 - 6 - EstTextWidth(HeaderText(d, isDone, False), HDR_SIZE) - 6
+    If mx < 30 Then mx = 30
+    If tw > mx Then tw = mx
+    sz = TAG_SIZE
+    need = EstTextWidth(TagText(d.StatusIdx, isDone), TAG_SIZE)
+    If need > tw - 6 Then
+        sz = Int(TAG_SIZE * (tw - 6) / need * 2) / 2
+        If sz < TAG_MIN_SIZE Then sz = TAG_MIN_SIZE
+    End If
+End Sub
 
 '==============================================================
 '  付箋を作る
@@ -374,8 +551,10 @@ End Function
 ' 付箋を作って (x, y) に貼る。isDone = True なら完了（グレー）の付箋
 Public Function BuildNote(ByVal ws As Worksheet, ByRef d As NoteData, ByVal x As Single, ByVal y As Single, _
                           ByVal isDone As Boolean) As Shape
-    Dim w As Single, tw As Single, yy As Single, tok As String, nm As String, i As Long
+    Dim w As Single, tw As Single, tsz As Single, withDates As Boolean, yy As Single, tok As String, nm As String
+    Dim i As Long, bx As Single, by As Single, bw As Single, parts As String
     Dim sBase As Shape, sHdr As Shape, sTag As Shape, sTtl As Shape, sBody As Shape, sMemo As Shape, sLbl As Shape
+    Dim sInfo As Shape, sProg As Shape, sBar As Shape, sFill As Shape
     Dim grp As Shape
 
     w = NoteWidth()
@@ -387,8 +566,9 @@ Public Function BuildNote(ByVal ws As Worksheet, ByRef d As NoteData, ByVal x As
     SetText sBase, "", SizeBody(), False
 
     ' 見出し帯（番号・日付）
+    TagMetrics d, isDone, tw, tsz, withDates
     Set sHdr = AddPart(ws, msoShapeRectangle, tok, ROLE_HDR, x, y, w, HDR_H)
-    SetText sHdr, HeaderText(d, isDone), HDR_SIZE, False
+    SetText sHdr, HeaderText(d, isDone, withDates), HDR_SIZE, False
     With sHdr.TextFrame2
         .VerticalAnchor = msoAnchorMiddle
         .MarginTop = 0
@@ -396,9 +576,8 @@ Public Function BuildNote(ByVal ws As Worksheet, ByRef d As NoteData, ByVal x As
     End With
 
     ' ステータスボタン
-    tw = TagWidth()
     Set sTag = AddPart(ws, msoShapeRoundedRectangle, tok, ROLE_TAG, x + w - tw - 4, y + (HDR_H - TAG_H) / 2, tw, TAG_H)
-    SetText sTag, TagText(d.StatusIdx, isDone), TAG_SIZE, True
+    SetText sTag, TagText(d.StatusIdx, isDone), tsz, True
     With sTag.TextFrame2
         .WordWrap = msoFalse
         .VerticalAnchor = msoAnchorMiddle
@@ -410,24 +589,23 @@ Public Function BuildNote(ByVal ws As Worksheet, ByRef d As NoteData, ByVal x As
     End With
     sTag.Adjustments.Item(1) = 0.5
 
-    ' タイトル
+    ' タイトル（全文を表示する。欄に入らないときは文字を小さくする）
     yy = y + HDR_H + 2
     Set sTtl = AddPart(ws, KIND_TEXTBOX, tok, ROLE_TITLE, x, yy, w, TITLE_MIN_H)
-    SetText sTtl, d.Title, SizeTitle(), True
-    FitHeight sTtl, TITLE_MIN_H
+    FitTitle sTtl, d.Title
     yy = yy + sTtl.Height
 
     ' 内容
     Set sBody = AddPart(ws, KIND_TEXTBOX, tok, ROLE_BODY, x, yy, w, BODY_MIN_H)
     SetText sBody, d.Body, SizeBody(), False
-    FitHeight sBody, BODY_MIN_H
+    FitHeight sBody, BODY_MIN_H, TEXT_SLACK
     yy = yy + sBody.Height + 2
 
     ' 備考（上に「備考」の小さな文字を重ねる）
     Set sMemo = AddPart(ws, KIND_TEXTBOX, tok, ROLE_MEMO, x, yy, w, MEMO_MIN_H)
     SetText sMemo, d.Memo, SizeMemo(), False
     sMemo.TextFrame2.MarginTop = MEMO_LABEL_H + 2
-    FitHeight sMemo, MEMO_MIN_H
+    FitHeight sMemo, MEMO_MIN_H, TEXT_SLACK
     Set sLbl = AddPart(ws, KIND_TEXTBOX, tok, ROLE_LABEL, x, yy, 60, MEMO_LABEL_H + 2)
     SetText sLbl, "備考", 7, True
     With sLbl.TextFrame2
@@ -436,10 +614,35 @@ Public Function BuildNote(ByVal ws As Worksheet, ByRef d As NoteData, ByVal x As
     End With
     yy = yy + sMemo.Height
 
+    ' 起票日時・開始日・終了日
+    Set sInfo = AddPart(ws, KIND_TEXTBOX, tok, ROLE_INFO, x, yy, w, 30)
+    SetText sInfo, InfoText(d, w), INFO_SIZE, False
+    StyleInfo sInfo, w, 4
+    FitHeight sInfo, 0
+    yy = yy + sInfo.Height
+
+    ' 進捗率（文字の間にバーを置く）
+    Set sProg = AddPart(ws, KIND_TEXTBOX, tok, ROLE_PROG, x, yy, w, 14)
+    SetText sProg, ProgressText(ClampPct(d.Progress)), INFO_SIZE, False
+    StyleInfo sProg, w, 0
+    FitHeight sProg, 0
+    bx = x + sProg.TextFrame2.MarginLeft + INFO_TAB
+    bw = w - sProg.TextFrame2.MarginLeft - sProg.TextFrame2.MarginRight - INFO_TAB - PCT_W
+    by = sProg.Top + (sProg.Height - PBAR_H) / 2
+    Set sBar = AddPart(ws, msoShapeRectangle, tok, ROLE_PBAR, bx, by, bw, PBAR_H)
+    parts = Join(Array(sBase.Name, sHdr.Name, sTag.Name, sTtl.Name, sBody.Name, sMemo.Name, sLbl.Name, _
+                       sInfo.Name, sProg.Name, sBar.Name), vbTab)
+    If ClampPct(d.Progress) > 0 Then
+        Set sFill = AddPart(ws, msoShapeRectangle, tok, ROLE_PFILL, bx, by, bw * ClampPct(d.Progress) / 100, PBAR_H)
+        parts = parts & vbTab & sFill.Name
+    End If
+    yy = yy + sProg.Height + 5
+
     sBase.Height = yy - y
 
     ' グループ化して名前と情報を付ける
-    Set grp = ws.Shapes.Range(Array(sBase.Name, sHdr.Name, sTag.Name, sTtl.Name, sBody.Name, sMemo.Name, sLbl.Name)).Group
+    ' （Shapes.Range には String の配列を渡す。Variant の変数に入れた配列を渡すとエラー 1004 になる）
+    Set grp = ws.Shapes.Range(Split(parts, vbTab)).Group
     nm = NoteName(d.Id)
     grp.Name = nm
     For i = 1 To grp.GroupItems.Count
@@ -494,6 +697,16 @@ Public Sub PaintNote(ByVal grp As Shape, ByVal si As Long, ByVal isDone As Boole
             ColorText s, txt
         Case ROLE_LABEL
             ColorText s, ShadeColor(c, 0.55)
+        Case ROLE_INFO, ROLE_PROG
+            ColorText s, txt
+            MarkLabels s, ShadeColor(c, 0.55)
+        Case ROLE_PBAR
+            FillWith s, TintColor(c, 0.65)
+            s.Line.Visible = msoTrue
+            s.Line.ForeColor.RGB = ShadeColor(c, 0.3)
+            s.Line.Weight = 0.5
+        Case ROLE_PFILL
+            FillWith s, tc
         End Select
     Next
 End Sub
@@ -511,11 +724,20 @@ End Sub
 
 ' ステータスが変わったときの見た目の更新（作り直さずに色と文字だけ変える）
 Public Sub RestyleNote(ByVal grp As Shape, ByRef d As NoteData, ByVal isDone As Boolean)
-    Dim s As Shape
+    Dim s As Shape, b As Shape, tw As Single, tsz As Single, withDates As Boolean
+    TagMetrics d, isDone, tw, tsz, withDates
     Set s = PartOf(grp, ROLE_TAG)
-    If Not s Is Nothing Then ReplaceText s, TagText(d.StatusIdx, isDone), TAG_SIZE, True
+    If Not s Is Nothing Then
+        ReplaceText s, TagText(d.StatusIdx, isDone), tsz, True
+        ' 完了にしたとき・ステータス名を変えたときは、幅を合わせて右端に置き直す
+        If Abs(s.Width - tw) > 1 Then
+            Set b = PartOf(grp, ROLE_BASE)
+            s.Width = tw
+            If Not b Is Nothing Then s.Left = b.Left + b.Width - tw - 4
+        End If
+    End If
     Set s = PartOf(grp, ROLE_HDR)
-    If Not s Is Nothing Then ReplaceText s, HeaderText(d, isDone), HDR_SIZE, False
+    If Not s Is Nothing Then ReplaceText s, HeaderText(d, isDone, withDates), HDR_SIZE, False
     WriteMeta grp, d
     PaintNote grp, d.StatusIdx, isDone
 End Sub
